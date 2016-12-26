@@ -1,5 +1,7 @@
 #include <SDL2/SDL.h>
+#include <stdbool.h>
 
+// Must be closed
 static const int map[][13] = {
     { 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1 },
     { 1, 0, 0, 0, 1, 0, 0, 0, 0, 0, 1, 1, 1 },
@@ -62,37 +64,53 @@ static struct point sw(const struct point player, const double m, const double b
     return (struct point){ x, y };
 }
 
-static struct point step(const struct point player, const double slope, const int sector)
+static bool hor(const struct point point)
 {
-    const double intercept = player.y - slope * player.x;
-    const struct point n = sn(player, slope, intercept); // Step north
-    const struct point e = se(player, slope, intercept); // Step east
-    const struct point s = ss(player, slope, intercept); // Step south
-    const struct point w = sw(player, slope, intercept); // Step west
+    const int x = point.x;
+    const int y = point.y;
+    return (point.y == floor(point.y)) && (map[y][x] || map[y - 1][x]);
+}
+
+static bool ver(const struct point point)
+{
+    const int x = point.x;
+    const int y = point.y;
+    return (point.x == floor(point.x)) && (map[y][x] || map[y][x - 1]);
+}
+
+static bool col(const struct point player)
+{
+    const int x = player.x;
+    const int y = player.y;
+    return map[y][x];
+}
+
+static double where(const struct point point)
+{
+    double null;
+    if(hor(point)) return modf(point.x, &null);
+    if(ver(point)) return modf(point.y, &null);
+    return -1.0;
+}
+
+static struct point step(const struct point player, const double m, const int quadrant)
+{
+    const double b = player.y - m * player.x;
+    const struct point n = sn(player, m, b); // Step north
+    const struct point e = se(player, m, b); // Step east
+    const struct point s = ss(player, m, b); // Step south
+    const struct point w = sw(player, m, b); // Step west
     // Step to the next line
-    struct point next;
-    switch(sector)
+    struct point point;
+    switch(quadrant)
     {
-        case 0: next = mag(sub(e, player)) < mag(sub(s, player)) ? e : s; break;
-        case 1: next = mag(sub(w, player)) < mag(sub(s, player)) ? w : s; break;
-        case 2: next = mag(sub(w, player)) < mag(sub(n, player)) ? w : n; break;
-        case 3: next = mag(sub(e, player)) < mag(sub(n, player)) ? e : n; break;
+        case 0: point = mag(sub(e, player)) < mag(sub(s, player)) ? e : s; break;
+        case 1: point = mag(sub(w, player)) < mag(sub(s, player)) ? w : s; break;
+        case 2: point = mag(sub(w, player)) < mag(sub(n, player)) ? w : n; break;
+        case 3: point = mag(sub(e, player)) < mag(sub(n, player)) ? e : n; break;
     }
-    // Check the map
-    const int x = next.x;
-    const int y = next.y;
-    // Horizontal line?
-    if(next.y == floor(next.y))
-    {
-        if(map[y][x] || map[y - 1][x]) return next; // Is it a wall?
-    }
-    // Vertical line
-    else
-    {
-        if(map[y][x] || map[y][x - 1]) return next; // Please be a wall...
-    }
-    // No Wall? Next line
-    return step(next, slope, sector);
+    // Move onto the next line if no wall is found
+    return hor(point) || ver(point) ? point : step(point, m, quadrant);
 }
 
 static int quadrant(const double radians)
@@ -114,6 +132,7 @@ int main(void)
     SDL_Init(SDL_INIT_VIDEO);
     SDL_Window* const window = SDL_CreateWindow("water", 120, 80, xres, yres, SDL_WINDOW_SHOWN);
     SDL_Renderer* const renderer = SDL_CreateRenderer(window, -1, SDL_RENDERER_SOFTWARE);
+    SDL_Surface* const surface = SDL_LoadBMP("hello.bmp");
     // Player init
     struct point player = { 2.5, 2.5 };
     double theta = 0.0;
@@ -138,9 +157,7 @@ int main(void)
         if(key[SDL_SCANCODE_S]) temp.x -= dx * cos(theta), temp.y -= dy * sin(theta);
         if(key[SDL_SCANCODE_A]) temp.y -= dx * cos(theta), temp.x += dy * sin(theta);
         if(key[SDL_SCANCODE_D]) temp.y += dx * cos(theta), temp.x -= dy * sin(theta);
-        const int x = temp.x;
-        const int y = temp.y;
-        player = map[y][x] ? player : temp; // Collision detection
+        player = col(temp) ? player : temp;
         // Clear screen
         SDL_SetRenderDrawColor(renderer, 0x00, 0x00, 0x00, 0x00);
         SDL_RenderClear(renderer);
@@ -151,8 +168,8 @@ int main(void)
             const double focal = 2.5;
             const double sigma = atan2(pan, focal);
             const double radians = sigma + theta;
-            const double slope = tan(radians);
-            const struct point wall = step(player, slope, quadrant(radians));
+            const double m = tan(radians);
+            const struct point wall = step(player, m, quadrant(radians));
             const struct point ray = sub(wall, player);
             // Fish eye correction
             const double magnitude = mag(ray);
@@ -161,10 +178,10 @@ int main(void)
             const double height = yres / normal;
             const double top = (yres / 2.0) - (height / 2.0);
             const double bot = (yres / 2.0) + (height / 2.0);
-            // Torch brightness
-            const double brightness = 500.0;
-            const double torch = brightness / pow(magnitude, 2.0);
-            SDL_SetRenderDrawColor(renderer, 0x00, 0x00, torch > 0xFF ? 0xFF : torch, 0x00);
+            // Texture mapping
+            const double offset = where(wall);
+            const double percentage = 100.0 * offset;
+            SDL_SetRenderDrawColor(renderer, 0x00, 0x00, 0xFF, 0x00);
             SDL_RenderDrawLine(renderer, col, top, col, bot);
         }
         // Render wall
@@ -176,6 +193,7 @@ int main(void)
         SDL_Delay(ms);
     }
     // Cleanup
+    SDL_FreeSurface(surface);
     SDL_DestroyWindow(window);
     SDL_DestroyRenderer(renderer);
     SDL_Quit();
